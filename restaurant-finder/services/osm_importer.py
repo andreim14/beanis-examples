@@ -86,6 +86,127 @@ class OSMImporter:
         logger.info(f"✅ Parsed {len(restaurants)} restaurants")
         return restaurants
 
+    def fetch_by_bbox(self, bbox: Dict) -> List[Dict]:
+        """
+        Fetch restaurants in a bounding box from OpenStreetMap
+
+        Args:
+            bbox: Dict with keys: south, west, north, east (coordinates)
+
+        Returns:
+            List of restaurant dictionaries
+        """
+        south = bbox["south"]
+        west = bbox["west"]
+        north = bbox["north"]
+        east = bbox["east"]
+
+        logger.info(f"🌍 Fetching restaurants from bbox: ({south},{west},{north},{east})")
+
+        # Overpass QL query for bbox
+        query = f"""
+        [out:json][timeout:{self.timeout}];
+        (
+          node["amenity"="restaurant"]({south},{west},{north},{east});
+          way["amenity"="restaurant"]({south},{west},{north},{east});
+        );
+        out center;
+        """
+
+        try:
+            response = requests.post(
+                self.overpass_url,
+                data={"data": query},
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+
+        except requests.exceptions.Timeout:
+            logger.error(f"❌ Timeout fetching data from OSM (>{self.timeout}s)")
+            return []
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Error fetching data from OSM: {e}")
+            return []
+
+        data = response.json()
+        elements = data.get("elements", [])
+
+        logger.info(f"📦 Received {len(elements)} elements from OSM")
+
+        # Parse OSM data - use "Unknown" for city/country since we don't know
+        restaurants = []
+        for element in elements:
+            restaurant = self._parse_osm_element(element, "Unknown", "Unknown")
+            if restaurant:
+                restaurants.append(restaurant)
+
+        logger.info(f"✅ Parsed {len(restaurants)} restaurants from bbox")
+        return restaurants
+
+    def save_to_db(self, osm_data: List[Dict], db) -> int:
+        """
+        Save OSM restaurant data to PostgreSQL
+
+        Args:
+            osm_data: List of parsed restaurant dictionaries
+            db: SQLAlchemy database session
+
+        Returns:
+            Number of restaurants imported (skips duplicates)
+        """
+        from models import RestaurantDB
+        from sqlalchemy import func
+
+        imported = 0
+        skipped = 0
+
+        for data in osm_data:
+            # Check if already exists
+            exists = db.query(RestaurantDB).filter_by(
+                osm_id=data["osm_id"]
+            ).first()
+
+            if exists:
+                skipped += 1
+                continue
+
+            # Create restaurant
+            restaurant = RestaurantDB(
+                osm_id=data["osm_id"],
+                name=data["name"],
+                location=func.ST_SetSRID(
+                    func.ST_MakePoint(data["longitude"], data["latitude"]),
+                    4326
+                ),
+                address=data["address"],
+                city=data["city"],
+                country=data["country"],
+                cuisine=data["cuisine"],
+                phone=data["phone"],
+                website=data["website"],
+                outdoor_seating=data["outdoor_seating"],
+                accepts_delivery=data["delivery"],
+                takeaway=data["takeaway"],
+                wheelchair_accessible=data["wheelchair"],
+                opening_hours={"raw": data["opening_hours"]} if data["opening_hours"] else {},
+                is_active=True
+            )
+
+            db.add(restaurant)
+            imported += 1
+
+            # Commit in batches
+            if imported % 100 == 0:
+                db.commit()
+                logger.info(f"  💾 Committed {imported} restaurants...")
+
+        # Final commit
+        db.commit()
+
+        logger.info(f"✅ Imported {imported} new restaurants, skipped {skipped} duplicates")
+        return imported
+
     def _parse_osm_element(
         self,
         element: Dict,
@@ -156,10 +277,10 @@ class OSMImporter:
         parts = []
 
         if street := tags.get("addr:street"):
-            parts.append(street)
+            parts.append(str(street))
 
         if housenumber := tags.get("addr:housenumber"):
-            parts.append(housenumber)
+            parts.append(str(housenumber))
 
         return " ".join(parts) if parts else ""
 

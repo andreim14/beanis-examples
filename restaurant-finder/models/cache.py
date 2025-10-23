@@ -1,5 +1,8 @@
 """Beanis Redis cache models"""
+from __future__ import annotations
 from beanis import Document, Indexed, GeoPoint
+from beanis.odm.indexes import IndexedField
+from typing_extensions import Annotated
 from typing import Optional
 from datetime import datetime
 from pydantic import Field
@@ -16,19 +19,19 @@ class RestaurantCache(Document):
     """
 
     # Source tracking
-    db_id: int  # PostgreSQL ID reference
+    db_id: Indexed(int)  # PostgreSQL ID reference (indexed for lookups)
     osm_id: str  # OpenStreetMap ID
 
     # Core data
     name: str
-    location: GeoPoint  # ⭐ Automatically creates Redis geo-spatial index
-    address: str
-    city: Indexed[str]  # Creates sorted set for city filtering
+    location: Annotated[GeoPoint, IndexedField()]  # ⭐ Automatically creates Redis geo-spatial index
+    address: Optional[str] = ""
+    city: Indexed(str)  # Creates sorted set for city filtering
 
     # Searchable attributes (indexed for fast filtering)
-    cuisine: Indexed[str]  # italian, japanese, etc.
-    price_range: Indexed[int]  # 1-4 ($-$$$$)
-    rating: Indexed[float]  # 0-5 stars
+    cuisine: Indexed(str)  # italian, japanese, etc.
+    price_range: Indexed(int)  # 1-4 ($-$$$$)
+    rating: Indexed(float)  # 0-5 stars
 
     # Features
     accepts_delivery: bool = True
@@ -42,7 +45,7 @@ class RestaurantCache(Document):
     website: Optional[str] = None
 
     # Cache metadata
-    is_active: Indexed[bool] = True
+    is_active: Indexed(bool) = True
     cached_at: datetime = Field(default_factory=datetime.now)
 
     class Settings:

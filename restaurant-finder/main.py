@@ -1,5 +1,6 @@
 """FastAPI application for restaurant finder"""
 import logging
+import math
 from typing import Optional
 from fastapi import FastAPI, Query, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -63,7 +64,7 @@ async def find_nearby_restaurants(
     cuisine: Optional[str] = Query(None, description="Filter by cuisine type"),
     min_rating: float = Query(0, description="Minimum rating", ge=0, le=5),
     max_price: int = Query(4, description="Maximum price range (1-4)", ge=1, le=4),
-    limit: int = Query(20, description="Maximum results", ge=1, le=100),
+    limit: int = Query(1000, description="Maximum results", ge=1, le=10000),
     db: Session = Depends(get_db)
 ):
     """
@@ -97,39 +98,34 @@ async def find_nearby_restaurants(
         # Limit results
         results = results[:limit]
 
-        # Calculate distance for each result
-        user_location = GeoPoint(lat=lat, lon=lon)
-
         # Format response
         restaurants = []
-        for r in results:
-            distance_m = r.location.distance_to(user_location)
-
+        for restaurant, distance_km in results:
             restaurants.append({
-                "id": r.db_id,
-                "name": r.name,
-                "cuisine": r.cuisine,
-                "rating": r.rating,
-                "price_range": "$" * r.price_range,
-                "distance_meters": round(distance_m, 0),
-                "distance_km": round(distance_m / 1000, 2),
+                "id": restaurant.db_id,
+                "name": restaurant.name,
+                "cuisine": restaurant.cuisine,
+                "rating": restaurant.rating,
+                "price_range": "$" * restaurant.price_range,
+                "distance_meters": round(distance_km * 1000, 0),
+                "distance_km": round(distance_km, 2),
                 "location": {
-                    "latitude": r.location.latitude,
-                    "longitude": r.location.longitude,
-                    "address": r.address
+                    "latitude": restaurant.location.latitude,
+                    "longitude": restaurant.location.longitude,
+                    "address": restaurant.address
                 },
                 "features": {
-                    "delivery": r.accepts_delivery,
-                    "outdoor_seating": r.outdoor_seating,
-                    "takeaway": r.takeaway,
-                    "wheelchair_accessible": r.wheelchair_accessible
+                    "delivery": restaurant.accepts_delivery,
+                    "outdoor_seating": restaurant.outdoor_seating,
+                    "takeaway": restaurant.takeaway,
+                    "wheelchair_accessible": restaurant.wheelchair_accessible
                 },
                 "contact": {
-                    "phone": r.phone,
-                    "website": r.website
+                    "phone": restaurant.phone,
+                    "website": restaurant.website
                 },
-                "opening_hours": r.opening_hours,
-                "cache_age_seconds": round(r.cache_age_seconds, 1)
+                "opening_hours": restaurant.opening_hours,
+                "cache_age_seconds": round(restaurant.cache_age_seconds, 1)
             })
 
         # Sort by distance
@@ -152,61 +148,6 @@ async def find_nearby_restaurants(
     except Exception as e:
         logger.error(f"Error finding restaurants: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/restaurants/{restaurant_id}")
-async def get_restaurant(
-    restaurant_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get details for a specific restaurant"""
-    from models import RestaurantDB
-
-    restaurant = db.query(RestaurantDB).filter_by(id=restaurant_id).first()
-
-    if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
-
-    # Extract coordinates
-    from sqlalchemy import func
-    from geoalchemy2.functions import ST_Y, ST_X
-
-    coords = db.query(
-        ST_Y(RestaurantDB.location),
-        ST_X(RestaurantDB.location)
-    ).filter_by(id=restaurant.id).first()
-
-    lat, lon = coords if coords else (None, None)
-
-    return {
-        "id": restaurant.id,
-        "osm_id": restaurant.osm_id,
-        "name": restaurant.name,
-        "cuisine": restaurant.cuisine,
-        "rating": restaurant.rating,
-        "price_range": "$" * restaurant.price_range,
-        "location": {
-            "latitude": lat,
-            "longitude": lon,
-            "address": restaurant.address,
-            "city": restaurant.city,
-            "country": restaurant.country
-        },
-        "features": {
-            "delivery": restaurant.accepts_delivery,
-            "outdoor_seating": restaurant.outdoor_seating,
-            "takeaway": restaurant.takeaway,
-            "wheelchair_accessible": restaurant.wheelchair_accessible
-        },
-        "contact": {
-            "phone": restaurant.phone,
-            "website": restaurant.website
-        },
-        "opening_hours": restaurant.opening_hours,
-        "is_active": restaurant.is_active,
-        "created_at": restaurant.created_at.isoformat(),
-        "updated_at": restaurant.updated_at.isoformat()
-    }
 
 
 @app.get("/stats")
@@ -232,6 +173,93 @@ async def get_stats(db: Session = Depends(get_db)):
                 if total_restaurants > 0 else "0%"
         }
     }
+
+
+@app.post("/import/area")
+async def import_area(
+    lat: float = Query(..., description="Center latitude"),
+    lon: float = Query(..., description="Center longitude"),
+    radius_km: float = Query(5.0, description="Search radius in km", gt=0, le=20),
+    db: Session = Depends(get_db)
+):
+    """
+    Import restaurants from OpenStreetMap for a specific area
+
+    This will:
+    1. Query OpenStreetMap Overpass API for restaurants
+    2. Save them to PostgreSQL
+    3. Cache them in Redis
+    """
+    from services.osm_importer import OSMImporter
+    from services.restaurant_service import RestaurantService
+
+    try:
+        logger.info(f"Importing restaurants around ({lat}, {lon}) within {radius_km}km")
+
+        # Initialize importer
+        importer = OSMImporter()
+
+        # Fetch from OpenStreetMap using bounding box
+        # Calculate bounding box (approximate)
+        lat_offset = radius_km / 111.0  # 1 degree lat ≈ 111 km
+        lon_offset = radius_km / (111.0 * abs(math.cos(math.radians(lat))))  # adjust for longitude
+
+        bbox = {
+            "south": lat - lat_offset,
+            "west": lon - lon_offset,
+            "north": lat + lat_offset,
+            "east": lon + lon_offset
+        }
+
+        # Fetch restaurants from OSM
+        osm_data = importer.fetch_by_bbox(bbox)
+
+        if not osm_data:
+            return {
+                "status": "no_results",
+                "imported": 0,
+                "message": "No restaurants found in this area on OpenStreetMap"
+            }
+
+        # Save to PostgreSQL
+        saved_count = importer.save_to_db(osm_data, db)
+
+        # Warm cache for this area
+        service = RestaurantService(db)
+        cached_count = 0
+
+        # Get all restaurants in the area we just imported
+        from models import RestaurantDB
+        from geoalchemy2.functions import ST_SetSRID, ST_MakePoint, ST_DWithin
+
+        point = ST_SetSRID(ST_MakePoint(lon, lat), 4326)
+        nearby_restaurants = db.query(RestaurantDB).filter(
+            ST_DWithin(
+                RestaurantDB.location,
+                point,
+                radius_km * 1000  # meters
+            ),
+            RestaurantDB.is_active == True
+        ).all()
+
+        # Cache them
+        if nearby_restaurants:
+            await service._cache_results(nearby_restaurants)
+            cached_count = len(nearby_restaurants)
+
+        logger.info(f"✅ Imported {saved_count} new restaurants, cached {cached_count}")
+
+        return {
+            "status": "success",
+            "imported": saved_count,
+            "cached": cached_count,
+            "total_found": len(osm_data),
+            "message": f"Successfully imported {saved_count} restaurants and cached {cached_count}"
+        }
+
+    except Exception as e:
+        logger.error(f"Error importing restaurants: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

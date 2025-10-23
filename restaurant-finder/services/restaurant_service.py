@@ -4,9 +4,13 @@ from typing import List, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from geoalchemy2.functions import ST_SetSRID, ST_MakePoint, ST_DWithin, ST_Y, ST_X
+from geoalchemy2.functions import ST_SetSRID, ST_MakePoint, ST_DWithin
+from sqlalchemy import cast, func
+from geoalchemy2.types import Geometry
 
 from models import RestaurantDB, RestaurantCache
+from database import get_redis_client
+from beanis.odm.indexes import IndexManager
 from beanis import GeoPoint
 
 logger = logging.getLogger(__name__)
@@ -35,7 +39,7 @@ class RestaurantService:
         min_rating: float = 0.0,
         max_price: int = 4,
         use_cache: bool = True
-    ) -> List[RestaurantCache]:
+    ) -> List[tuple[RestaurantCache, float]]:
         """
         Find restaurants near a location with intelligent caching
 
@@ -49,10 +53,10 @@ class RestaurantService:
             use_cache: Whether to use cache (default: True)
 
         Returns:
-            List of RestaurantCache objects
+            List of (RestaurantCache, distance_km) tuples
         """
 
-        user_location = GeoPoint(lat=lat, lon=lon)
+        user_location = GeoPoint(latitude=lat, longitude=lon)
 
         # === TRY CACHE FIRST ===
         if use_cache:
@@ -70,8 +74,43 @@ class RestaurantService:
             if cuisine:
                 query_params["cuisine"] = cuisine.lower()
 
-            # Query Redis via Beanis
-            results = await RestaurantCache.find_near(**query_params).to_list()
+            # Query Redis via Beanis geo-spatial index
+            redis_client = await get_redis_client()
+            
+            results_with_distance = await IndexManager.find_by_geo_radius_with_distance(
+                redis_client=redis_client,
+                document_class=RestaurantCache,
+                field_name="location",
+                longitude=lon,
+                latitude=lat,
+                radius=radius_km,
+                unit="km"
+            )
+            
+            # Get full documents and apply filters
+            results = []
+            for doc_id, distance in results_with_distance:
+                try:
+                    doc = await RestaurantCache.get(doc_id)
+                    if not doc:
+                        continue
+
+                    # Apply filters
+                    if cuisine and doc.cuisine != cuisine.lower():
+                        continue
+                    if doc.rating < min_rating:
+                        continue
+                    if doc.price_range > max_price:
+                        continue
+                    if not doc.is_active:
+                        continue
+
+                    # Store as (document, distance) tuple
+                    results.append((doc, distance))
+                except Exception as e:
+                    # Skip invalid cached documents
+                    logger.warning(f"Skipping invalid cached document {doc_id}: {e}")
+                    continue
 
             cache_time_ms = (datetime.now() - cache_start).total_seconds() * 1000
 
@@ -117,8 +156,8 @@ class RestaurantService:
             logger.info("📝 Caching results in Redis...")
             await self._cache_results(db_results)
 
-        # Convert to cache format for consistent API
-        return await self._db_to_cache_format(db_results)
+        # Convert to cache format with distances for consistent API
+        return await self._db_to_cache_format(db_results, user_lat=lat, user_lon=lon)
 
     async def _cache_results(self, db_results: List[RestaurantDB]):
         """
@@ -129,15 +168,11 @@ class RestaurantService:
         cached_count = 0
 
         for db_restaurant in db_results:
-            # Check if already cached
-            exists = await RestaurantCache.find_one(db_id=db_restaurant.id)
-            if exists:
-                continue
-
             # Extract coordinates from PostGIS geography
+            # Cast geography to geometry to use ST_Y/ST_X
             coords = self.db.query(
-                ST_Y(RestaurantDB.location),
-                ST_X(RestaurantDB.location)
+                func.ST_Y(cast(RestaurantDB.location, Geometry)),
+                func.ST_X(cast(RestaurantDB.location, Geometry))
             ).filter_by(id=db_restaurant.id).first()
 
             if not coords:
@@ -150,8 +185,8 @@ class RestaurantService:
                 db_id=db_restaurant.id,
                 osm_id=db_restaurant.osm_id,
                 name=db_restaurant.name,
-                location=GeoPoint(lat=lat, lon=lon),
-                address=db_restaurant.address or "",
+                location=GeoPoint(latitude=lat, longitude=lon),
+                address=str(db_restaurant.address) if db_restaurant.address else "",
                 city=db_restaurant.city,
                 cuisine=db_restaurant.cuisine,
                 price_range=db_restaurant.price_range,
@@ -172,21 +207,27 @@ class RestaurantService:
 
     async def _db_to_cache_format(
         self,
-        db_results: List[RestaurantDB]
-    ) -> List[RestaurantCache]:
+        db_results: List[RestaurantDB],
+        user_lat: float,
+        user_lon: float
+    ) -> List[tuple[RestaurantCache, float]]:
         """
-        Convert PostgreSQL results to RestaurantCache format
+        Convert PostgreSQL results to RestaurantCache format with distances
 
         This ensures the API always returns the same format,
         whether data came from cache or database
         """
+        from geoalchemy2.functions import ST_Distance
+
         cache_results = []
+        user_point = ST_SetSRID(ST_MakePoint(user_lon, user_lat), 4326)
 
         for db_restaurant in db_results:
             # Extract coordinates
+            # Cast geography to geometry to use ST_Y/ST_X
             coords = self.db.query(
-                ST_Y(RestaurantDB.location),
-                ST_X(RestaurantDB.location)
+                func.ST_Y(cast(RestaurantDB.location, Geometry)),
+                func.ST_X(cast(RestaurantDB.location, Geometry))
             ).filter_by(id=db_restaurant.id).first()
 
             if not coords:
@@ -194,13 +235,23 @@ class RestaurantService:
 
             lat, lon = coords
 
+            # Calculate distance using PostGIS
+            distance_m = self.db.query(
+                ST_Distance(
+                    RestaurantDB.location,
+                    user_point
+                )
+            ).filter_by(id=db_restaurant.id).scalar()
+
+            distance_km = distance_m / 1000.0 if distance_m else 0.0
+
             # Create RestaurantCache object (not saved to Redis)
             cache_obj = RestaurantCache(
                 db_id=db_restaurant.id,
                 osm_id=db_restaurant.osm_id,
                 name=db_restaurant.name,
-                location=GeoPoint(lat=lat, lon=lon),
-                address=db_restaurant.address or "",
+                location=GeoPoint(latitude=lat, longitude=lon),
+                address=str(db_restaurant.address) if db_restaurant.address else "",
                 city=db_restaurant.city,
                 cuisine=db_restaurant.cuisine,
                 price_range=db_restaurant.price_range,
@@ -214,7 +265,7 @@ class RestaurantService:
                 website=db_restaurant.website,
             )
 
-            cache_results.append(cache_obj)
+            cache_results.append((cache_obj, distance_km))
 
         return cache_results
 
