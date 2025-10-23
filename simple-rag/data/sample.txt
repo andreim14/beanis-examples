@@ -1,0 +1,19 @@
+Redis is an open-source, in-memory data structure store used as a database, cache, message broker, and streaming engine. Redis provides data structures such as strings, hashes, lists, sets, sorted sets with range queries, bitmaps, hyperloglogs, geospatial indexes, and streams.
+
+Beanis is a Python ODM (Object Document Mapper) for Redis, providing a simple and intuitive interface to work with Redis as if it were a document database. It supports Pydantic v2 models and offers features like automatic indexing, query building, and migration management.
+
+Vector embeddings are numerical representations of text that capture semantic meaning. Similar texts have similar embeddings, enabling semantic search where you can find documents based on meaning rather than exact keyword matches.
+
+RAG (Retrieval Augmented Generation) is a technique that enhances language models by retrieving relevant context from a knowledge base before generating responses. This allows models to provide more accurate and up-to-date information.
+
+Redis Vector Similarity Search (VSS) enables efficient similarity search on vector embeddings stored in Redis. It supports multiple distance metrics including cosine similarity, L2 distance, and inner product, with indexing algorithms like HNSW and FLAT.
+
+HNSW (Hierarchical Navigable Small World) is a graph-based algorithm for approximate nearest neighbor search in high-dimensional spaces. It provides excellent search performance with sub-linear time complexity.
+
+Semantic search finds results based on the meaning and context of queries rather than exact keyword matches. This is particularly useful for finding documents that answer questions even when they use different terminology.
+
+Python's Transformers library by Hugging Face provides easy access to thousands of pre-trained models for natural language processing tasks including text embedding generation, text classification, and question answering.
+
+FastAPI is a modern, fast web framework for building APIs with Python 3.7+ based on standard Python type hints. It provides automatic API documentation, data validation, and async support out of the box.
+
+Pydantic is a data validation library that uses Python type hints to validate data. It powers FastAPI's request validation and is the foundation of Beanis's model system.

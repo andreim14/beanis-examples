@@ -1,0 +1,4 @@
+# That's it! Only 3 dependencies for a full RAG system
+beanis>=0.0.8
+transformers>=4.35.0
+redis>=5.0.0
