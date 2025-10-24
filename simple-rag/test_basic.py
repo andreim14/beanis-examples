@@ -26,8 +26,7 @@ async def test_basic():
         print(f"  ✓ {text}")
 
     print("\n✅ Test passed! Documents inserted successfully.")
-    print("\n💡 Note: Vector search index needs to be created manually for now.")
-    print("   We'll add automatic index creation in the next iteration.")
+    print("\n💡 Note: Vector indexes are created automatically on first init_beanis() call.")
 
 if __name__ == "__main__":
     asyncio.run(test_basic())

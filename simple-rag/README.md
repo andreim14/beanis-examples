@@ -38,30 +38,17 @@ docker run -d -p 6379:6379 redis/redis-stack:latest
 
 **Important:** Use `redis-stack` (not regular Redis) for vector search support. It includes the RediSearch module.
 
-### 3. Create Vector Index (One-time Setup)
+### 3. Ingest Documents
 
-Create the vector search index in Redis:
-
-```bash
-redis-cli FT.CREATE idx:KnowledgeBase:vector \
-  ON HASH PREFIX 1 "KnowledgeBase:" \
-  SCHEMA embedding VECTOR HNSW 6 \
-    TYPE FLOAT32 DIM 1024 DISTANCE_METRIC COSINE
-```
-
-This tells Redis to index the `embedding` field for similarity search.
-
-> **Note:** Future versions of Beanis will create this automatically. For now, it's a one-time manual step.
-
-### 4. Ingest Documents
+**That's it!** Vector indexes are created automatically when you run `init_beanis()`.
 
 ```bash
 python ingest.py
 ```
 
-This loads sample documents and generates embeddings.
+This loads sample documents and generates embeddings. Vector indexes are created automatically on first run!
 
-### 5. Search
+### 4. Search
 
 ```bash
 python search.py "what is semantic search?"
