@@ -104,20 +104,36 @@ This will:
 
 ### 5. Run the Agent
 
-#### Option A: Tool-Calling Agent (Recommended)
+#### Option A: Streamlit UI (Best for Testing) ⭐
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Interactive chat interface with:
+- 💬 Real-time conversation
+- 🔧 Visual tool usage indicators
+- 📊 Response metadata
+- 💾 Session management
+- 🧹 Clear conversation/memory buttons
+- 💡 Example queries to try
+
+Open your browser to `http://localhost:8501`
+
+#### Option B: Test Script
 
 ```bash
 python test_tool_agent.py
 ```
 
-This demonstrates the intelligent agent that:
+Automated test demonstrating:
 - **Greets without tools** - Simple queries don't need retrieval
 - **Searches when needed** - Factual questions trigger knowledge base search
 - **Stores user preferences** - Agent remembers information in Redis
 - **Uses conversation history** - Contextual follow-up questions
 - **Combines tools** - Complex queries use multiple tools together
 
-#### Option B: Basic RAG Agent
+#### Option C: Basic RAG Agent
 
 ```bash
 python main.py
