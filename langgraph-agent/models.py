@@ -31,7 +31,7 @@ class KnowledgeDocument(Document):
 class ConversationHistory(Document):
     """Stores conversation history for context-aware responses"""
 
-    session_id: str = Field(description="Unique session identifier")
+    session_id: Annotated[str, Field(description="Unique session identifier", index=True)]
     role: str = Field(description="Role: user or assistant")
     content: str = Field(description="Message content")
     timestamp: datetime = Field(default_factory=datetime.now)

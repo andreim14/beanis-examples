@@ -1,47 +1,60 @@
-# LangGraph RAG Agent with Beanis
+# LangGraph RAG Agent with Beanis & MCP Tools
 
-Build intelligent AI agents with conversation memory and semantic search using LangGraph + Beanis + Redis.
+Build intelligent AI agents with conversation memory, semantic search, and tool calling using LangGraph + Beanis + Redis.
 
 ## What This Example Shows
 
-This example demonstrates how to build a production-ready RAG (Retrieval-Augmented Generation) agent that:
+This example demonstrates TWO approaches to building production-ready RAG agents:
 
+### 1. Basic RAG Agent (`agent.py`)
+A straightforward RAG pipeline that always retrieves context:
 - **Stores knowledge** in Redis using Beanis with vector embeddings
 - **Orchestrates workflows** using LangGraph for complex agent logic
-- **Maintains conversation history** across sessions for context-aware responses
-- **Retrieves relevant context** using semantic search
-- **Generates responses** using OpenAI GPT models with retrieved context
+- **Maintains conversation history** across sessions
+- **Always retrieves context** for every query (fixed pipeline)
+
+### 2. Tool-Calling Agent (`agent_with_tools.py`) ⭐ RECOMMENDED
+An intelligent agent using MCP (Model Context Protocol) tools that decides when to retrieve:
+- **Smart retrieval** - Agent decides when to search the knowledge base
+- **Memory management** - Store and retrieve custom agent state
+- **Conversation-aware** - Optionally loads history when needed
+- **Redis-backed memory** - Persistent key-value storage for agent memory
+- **MCP server** (`mcp_server.py`) - Reusable tools for any LangGraph agent
 
 ## Architecture
+
+### Tool-Calling Agent Architecture (Recommended)
 
 ```
 User Query
     ↓
-┌─────────────────────────────────────┐
-│         LangGraph Workflow          │
-│                                     │
-│  ┌─────────────────────────────┐   │
-│  │  1. Retrieve Context        │   │
-│  │     (Vector Search in Redis)│   │
-│  └────────────┬────────────────┘   │
-│               ↓                     │
-│  ┌─────────────────────────────┐   │
-│  │  2. Load History            │   │
-│  │     (From Redis)            │   │
-│  └────────────┬────────────────┘   │
-│               ↓                     │
-│  ┌─────────────────────────────┐   │
-│  │  3. Generate Response       │   │
-│  │     (OpenAI + Context)      │   │
-│  └────────────┬────────────────┘   │
-│               ↓                     │
-│  ┌─────────────────────────────┐   │
-│  │  4. Save to History         │   │
-│  │     (Redis via Beanis)      │   │
-│  └─────────────────────────────┘   │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│         LangGraph with Tool Calling      │
+│                                          │
+│  ┌────────────────────────────────┐     │
+│  │  Agent Node (LLM Reasoning)    │     │
+│  │  - Analyze query               │     │
+│  │  - Decide which tools to use   │     │
+│  └──────────┬─────────────────────┘     │
+│             ↓                            │
+│  ┌────────────────────────────────┐     │
+│  │  Tool Node (Execute Tools)     │     │
+│  │                                │     │
+│  │  Available MCP Tools:          │     │
+│  │  • search_knowledge_base()     │     │
+│  │  • get_conversation_history()  │     │
+│  │  • store_memory(key, value)    │     │
+│  │  • retrieve_memory(key)        │     │
+│  └──────────┬─────────────────────┘     │
+│             ↓                            │
+│       (Loop back to Agent if needed)     │
+│             ↓                            │
+│    Final Response Generation             │
+└──────────────────────────────────────────┘
     ↓
 Response + Metadata
+
+All tools interact with Redis via Beanis ODM
 ```
 
 ## Prerequisites
@@ -91,13 +104,29 @@ This will:
 
 ### 5. Run the Agent
 
+#### Option A: Tool-Calling Agent (Recommended)
+
+```bash
+python test_tool_agent.py
+```
+
+This demonstrates the intelligent agent that:
+- **Greets without tools** - Simple queries don't need retrieval
+- **Searches when needed** - Factual questions trigger knowledge base search
+- **Stores user preferences** - Agent remembers information in Redis
+- **Uses conversation history** - Contextual follow-up questions
+- **Combines tools** - Complex queries use multiple tools together
+
+#### Option B: Basic RAG Agent
+
 ```bash
 python main.py
 ```
 
-The agent will:
-- Run example queries to demonstrate functionality
-- Enter interactive mode for you to ask questions
+The basic agent:
+- Always retrieves context for every query
+- Fixed pipeline (no tool calling)
+- Simpler but less efficient
 
 ## How It Works
 
@@ -130,20 +159,45 @@ class AgentState(Document):
     query: Optional[str]
 ```
 
-### LangGraph Workflow
+### MCP Tools (Tool-Calling Agent)
 
-The agent uses LangGraph to orchestrate the RAG workflow:
+The MCP server provides reusable tools that the agent can call:
 
-1. **retrieve_context**: Vector search in Redis to find relevant documents
-2. **load_history**: Load recent conversation from Redis
+```python
+# 1. Search Knowledge Base
+search_knowledge_base(query: str, k: int = 3)
+# Vector similarity search in Redis - only called when needed
+
+# 2. Get Conversation History
+get_conversation_history(limit: int = 5)
+# Load past messages for context - agent decides when to use
+
+# 3. Store Agent Memory
+store_memory(key: str, value: Any)
+# Persist custom state in Redis (user prefs, facts, etc.)
+
+# 4. Retrieve Agent Memory
+retrieve_memory(key: str, default: Any = None)
+# Recall previously stored information
+```
+
+**Key Advantage**: The LLM decides which tools to use based on the query. Simple greetings don't trigger expensive vector searches!
+
+### LangGraph Workflows
+
+#### Basic Agent Workflow (agent.py)
+Fixed pipeline that always runs:
+1. **retrieve_context**: Vector search in Redis
+2. **load_history**: Load recent conversation
 3. **generate_response**: Use LLM with context + history
-4. **save_history**: Store conversation for future context
+4. **save_history**: Store conversation
 
-Each step is a node in the graph, allowing for:
-- **Parallel execution** where appropriate
-- **State management** between steps
-- **Error handling** at each node
-- **Easy modification** of workflow logic
+#### Tool-Calling Agent Workflow (agent_with_tools.py)
+Dynamic workflow with conditional tool usage:
+1. **agent_node**: LLM analyzes query and decides which tools to call
+2. **tool_node**: Execute selected tools (search, memory, history)
+3. **Loop**: Agent re-evaluates with tool results
+4. **Final response**: Generated when no more tools needed
 
 ### Vector Search with Beanis
 
