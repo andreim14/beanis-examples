@@ -61,12 +61,14 @@ pip install -r requirements.txt
 ### 2. Start Redis
 
 ```bash
-# Using Docker
-docker run -d -p 6379:6379 redis:latest
+# Using docker-compose (recommended)
+docker-compose up -d
 
-# Or using redis-stack for additional features
-docker run -d -p 6379:6379 redis/redis-stack:latest
+# Or manually with docker
+docker run -d -p 6379:6379 --name langgraph-redis --platform linux/amd64 redis/redis-stack:latest
 ```
+
+**⚠️ Important for ARM Macs (M1/M2/M3)**: You MUST use the `--platform linux/amd64` flag or specify `platform: linux/amd64` in docker-compose. There's a known bug in Redis Stack ARM64 builds where the RediSearch module crashes when processing vector data using SVE2 instructions, causing vector indexes to be silently dropped. Using the x86 image under Rosetta emulation avoids this issue.
 
 ### 3. Set OpenAI API Key
 
@@ -264,6 +266,26 @@ Benchmarked on M1 Mac with 100 documents:
 # Make sure Redis is running
 redis-cli ping
 # Should return: PONG
+```
+
+**Vector index disappears after inserting documents (ARM Macs)**:
+This is caused by a Redis Stack ARM64 bug. Solution:
+```bash
+# Stop current container
+docker stop langgraph-redis && docker rm langgraph-redis
+
+# Start with x86 emulation
+docker run -d -p 6379:6379 --name langgraph-redis --platform linux/amd64 redis/redis-stack:latest
+```
+
+Or update docker-compose.yml:
+```yaml
+services:
+  redis:
+    image: redis/redis-stack:latest
+    platform: linux/amd64  # Add this line
+    ports:
+      - "6379:6379"
 ```
 
 **OpenAI API errors**:

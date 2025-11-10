@@ -20,7 +20,7 @@ async def test_retrieval():
 
     print("🚀 Testing Vector Retrieval\n")
 
-    redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+    redis_client = redis.Redis(host="localhost", port=6379, decode_responses=False)
 
     await init_beanis(database=redis_client, document_models=[KnowledgeDocument])
 
